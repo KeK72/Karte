@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meine Fahrten</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  html,body{height:100%;margin:0;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+  #map{position:absolute;inset:0}
+  #bar{position:absolute;z-index:1000;top:10px;left:50px;right:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+       background:rgba(20,20,18,.88);color:#f1efe8;padding:8px 12px;border-radius:12px;font-size:.9rem;width:fit-content;max-width:calc(100% - 60px)}
+  #bar select,#bar a,#bar button{background:#2c2a26;color:#f1efe8;border:1px solid #4a463d;border-radius:8px;padding:5px 10px;font:inherit;text-decoration:none;cursor:pointer}
+  #msg{position:absolute;z-index:1000;inset:0;display:flex;align-items:center;justify-content:center;background:#161614;color:#f1efe8;text-align:center;padding:20px}
+  #msg a{display:inline-block;margin-top:14px;background:#fc4c02;color:#fff;padding:12px 22px;border-radius:10px;text-decoration:none;font-weight:600}
+</style>
+</head>
+<body>
+<div id="msg"><div><h2>Meine Fahrten</h2><p id="txt">Lade …</p></div></div>
+<div id="map"></div>
+<div id="bar" hidden>
+  <span id="stats"></span>
+  <select id="year"></select>
+  <select id="type"></select>
+  <a href="/api/logout">Abmelden</a>
+</div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+
+function decode(s){ // Google-Polyline, Genauigkeit 5
+  let i=0,la=0,lo=0,out=[];
+  while(i<s.length){
+    for(const k of [0,1]){
+      let sh=0,r=0,b;
+      do{b=s.charCodeAt(i++)-63;r|=(b&31)<<sh;sh+=5}while(b>=32);
+      const d=(r&1)?~(r>>1):(r>>1);
+      if(k===0)la+=d;else lo+=d;
+    }
+    out.push([la/1e5,lo/1e5]);
+  }
+  return out;
+}
+
+const map = L.map("map",{zoomControl:true}).setView([51.3,9.5],6);
+const dark = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  {attribution:"© OpenStreetMap © CARTO",maxZoom:19}).addTo(map);
+const osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+  {attribution:"© OpenStreetMap",maxZoom:19});
+L.control.layers({"Dunkel":dark,"Standard":osm}).addTo(map);
+const group = L.layerGroup().addTo(map);
+
+let rides=[], first=true;
+
+function draw(){
+  const y=$("year").value, t=$("type").value;
+  const list=rides.filter(r=>(y==="all"||r.date.startsWith(y))&&(t==="all"||r.type===t));
+  group.clearLayers();
+  const all=[];
+  for(const r of list){
+    const pts=r.pts||(r.pts=decode(r.line));
+    all.push(...pts);
+    L.polyline(pts,{color:"#ff7a00",weight:4,opacity:.28,lineCap:"round",lineJoin:"round"})
+      .bindTooltip(`${r.name}<br>${new Date(r.date).toLocaleDateString("de-DE")} · ${(r.dist/1000).toFixed(1)} km`,{sticky:true})
+      .addTo(group);
+  }
+  const km=list.reduce((a,r)=>a+r.dist,0)/1000;
+  $("stats").textContent=`${list.length} Fahrten · ${km.toFixed(0)} km`;
+  if(all.length&&first){map.fitBounds(L.latLngBounds(all),{padding:[30,30]});first=false}
+}
+
+function fill(sel,vals,label){
+  sel.innerHTML=`<option value="all">${label}</option>`+vals.map(v=>`<option>${v}</option>`).join("");
+  sel.onchange=()=>{first=true;draw()};
+}
+
+(async()=>{
+  if(location.search.includes("fehler")){
+    $("txt").innerHTML='Anmeldung fehlgeschlagen.<br><a href="/api/login">Erneut mit Strava verbinden</a>';return;
+  }
+  try{
+    const r=await fetch("/api/activities");
+    if(r.status===401){$("txt").innerHTML='Verbinde dein Strava-Konto, um deine Fahrten zu sehen.<br><a href="/api/login">Mit Strava verbinden</a>';return}
+    if(r.status===429){$("txt").textContent="Strava-Abruflimit erreicht. Bitte in 15 Minuten erneut versuchen.";return}
+    if(!r.ok)throw 0;
+    rides=await r.json();
+    if(!rides.length){$("txt").textContent="Keine Fahrten mit Strecke in Strava gefunden. Wurden sie von Beeline hochgeladen?";return}
+    fill($("year"),[...new Set(rides.map(r=>r.date.slice(0,4)))].sort().reverse(),"Alle Jahre");
+    fill($("type"),[...new Set(rides.map(r=>r.type))].sort(),"Alle Arten");
+    $("msg").hidden=true;$("bar").hidden=false;draw();
+  }catch(e){$("txt").textContent="Fehler beim Laden der Fahrten."}
+})();
+</script>
+</body>
+</html>
